@@ -1,0 +1,470 @@
+---
+title: "MLGym"
+output: html_document
+---
+```{r load }
+# Libraries
+library(tidyverse)
+library(lubridate)
+library(dplyr)
+library(tidyr)
+
+data_2017_2021 <- read_csv("~/Documents/Data Science/Machine Learning/data_2017_2021.csv")
+data_2022_2023 <- read_csv("~/Documents/Data Science/Machine Learning/data_2022_2023.csv")
+
+head(data_2017_2021)
+head(data_2022_2023)
+
+glimpse(data_2017_2021)
+glimpse(data_2022_2023)
+
+colnames(data_2017_2021)
+colnames(data_2022_2023)
+
+
+# new  complete data base & standarization
+df <- bind_rows(data_2017_2021, data_2022_2023)
+df <- df %>%
+  mutate(year = str_extract(Date, "\\d{4}$"))
+df <- df %>%
+  mutate(Apparatus = toupper(Apparatus))
+df <- df %>%
+  mutate(Apparatus = ifelse(Apparatus == "UE", "UB", Apparatus))
+
+# number of rows
+nrow(df)
+
+# columns
+colnames(df)
+
+# years
+table(df$year)
+
+# competitions
+length(unique(df$Competition))
+
+# events (apparatus)
+unique(df$Apparatus)
+
+# gender
+table(df$Gender)
+
+# Check df
+class(df)
+dim(df)
+
+```
+```{r clean}
+# ============================================================
+# 0. RESET & LOAD LIBRARIES
+# ============================================================
+
+
+library(dplyr)
+library(stringr)
+library(stringi)
+library(tibble)
+library(purrr)
+
+
+select <- dplyr::select 
+mutate <- dplyr::mutate 
+filter <- dplyr::filter
+
+# ============================================================
+# 1. STANDARDIZATION & ASCII CLEANING
+# ============================================================
+df_clean <- df %>%
+  mutate(
+    # Remove accents/special chars (Essential for matching dictionaries)
+    FirstName = stri_trans_general(str_trim(FirstName), "Latin-ASCII"),
+    LastName  = stri_trans_general(str_trim(LastName), "Latin-ASCII"),
+    Country   = str_to_upper(str_trim(Country)),
+    
+    # Standardize apparatus for the ML model
+    Apparatus = case_when(
+      Apparatus %in% c("FX", "FLOOR") ~ "FX",
+      Apparatus %in% c("PH", "POMMEL") ~ "PH",
+      Apparatus %in% c("SR", "RINGS") ~ "SR",
+      Apparatus %in% c("PB", "PBARS") ~ "PB",
+      Apparatus %in% c("HB", "HBAR") ~ "HB",
+      Apparatus %in% c("BB", "BEAM") ~ "BB",
+      Apparatus %in% c("UB", "BARS") ~ "UB",
+      TRUE ~ Apparatus
+    )
+  )
+
+df_clean <- df_clean %>%
+  mutate(
+    Gender = str_to_upper(str_trim(Gender)),  
+    Gender = case_when(
+      Gender %in% c("W", "F", "WOMEN", "WOMAN", "FEMALE", "WAG") ~ "WAG",
+      Gender %in% c("M", "MEN", "MAN", "MALE", "MAG") ~ "MAG",
+      TRUE ~ Gender
+    )
+  )
+
+# ============================================================
+# 2. DICTIONARIES
+# ============================================================
+name_dict <- tibble(
+  raw = c(
+    "Ellie", "Matt", "Mathew", "Samual", "Sam",
+    "Ga",
+    "Mohamad", "Shanté",
+    "Hansa", "Rakah",
+    "Noémie", "Dimitrijs",
+    "Sasiwimion", "Dmitry",
+    "Fred", "Léo",
+    "Jann", "Jin-Seong","Valentin"
+  ),
+  clean = c(
+    "Elisabeth", "Matthew", "Matthew", "Samuel", "Samuel",
+    "Garam",
+    "Mohamed", "Shante",
+    "Hansha", "Rakan",
+    "Noemie", "Dimitrijs",
+    "Sasiwimon", "Dmitriy",
+    "Frederick", "Leo",
+    "Jan", "Jinseong","Valentina"
+  )
+)
+
+name_exceptions <- tibble(
+  LastName = c("Chuaisom", "Akhmejanov"),
+  FirstName_correct = c("Weerapat", "Emil")
+)
+
+lastname_dict <- tibble(
+  raw = c("Damato", "Morz", "Sant"),
+  clean = c("Damato", "Morz", "Santos")
+)
+
+prefixes <- c("de", "del", "dos", "da", "van", "von", "di", "la", "le", "das", "mc")
+
+# ============================================================
+# 3. NAME DICTIONARY MATCHING (Safe Join)
+# ============================================================
+# We use distinct() to prevent duplicating rows during the join
+name_dict_safe <- name_dict %>% distinct(raw, .keep_all = TRUE)
+
+df_clean <- df_clean %>%
+  left_join(name_dict_safe, by = c("FirstName" = "raw")) %>%
+  mutate(FirstName = coalesce(clean, FirstName)) %>%
+  select(-clean)
+
+
+# ============================================================
+# 4. FULL CLEAN PIPELINE
+# ============================================================
+df_clean <- df_clean %>%
+  
+  # ----------------------------
+  # FIRST NAME CLEANING
+  # ----------------------------
+  mutate(
+    FirstName = str_trim(FirstName),
+    FirstName = str_extract(FirstName, "^[^- ]+")
+  ) %>%
+  
+  # ----------------------------
+  # FIRST NAME DICTIONARY
+  # ----------------------------
+  left_join(name_dict, by = c("FirstName" = "raw")) %>%
+  mutate(
+    FirstName = if_else(is.na(clean), FirstName, clean)
+  ) %>%
+  select(-clean) %>%
+  
+  # ----------------------------
+  # SPECIAL CASES
+  # ----------------------------
+  left_join(name_exceptions, by = "LastName") %>%
+  mutate(
+    FirstName = if_else(
+      FirstName == LastName & !is.na(FirstName_correct),
+      FirstName_correct,
+      FirstName
+    )
+  ) %>%
+  select(-FirstName_correct) %>%
+  
+  # ----------------------------
+  # LAST NAME CLEANING
+  # ----------------------------
+  mutate(
+    LastName = str_trim(LastName),
+    LastName = stri_trans_general(LastName, "Latin-ASCII"),
+    
+    # Fix special patterns
+    LastName = str_replace_all(LastName, "^D[’' ]", "D"),
+    LastName = str_replace_all(LastName, "^Mc\\s+", "Mc"),
+    
+    parts = str_split(LastName, " "),
+    
+    LastName = map_chr(parts, function(x) {
+      if (length(x) == 1) {
+        x
+      } else if (tolower(x[1]) %in% prefixes) {
+        paste(x[1], x[2])
+      } else {
+        x[1]
+      }
+    })
+  ) %>%
+  select(-parts) %>%
+  
+  # ----------------------------
+  # LAST NAME DICTIONARY
+  # ----------------------------
+  left_join(lastname_dict, by = c("LastName" = "raw")) %>%
+  mutate(
+    LastName = if_else(is.na(clean), LastName, clean)
+  ) %>%
+  select(-clean) %>%
+  
+  # ----------------------------
+  # FILL MISSING FIRST NAME
+  # ----------------------------
+  group_by(LastName, Country) %>%
+  mutate(
+    FirstName = if_else(
+      is.na(FirstName) & any(!is.na(FirstName)),
+      FirstName[!is.na(FirstName)][1],
+      FirstName
+    )
+  ) %>%
+  ungroup()
+
+
+# ============================================================
+# 5. ATHLETE ID CREATION
+# ============================================================
+# This is the "Group" variable for your Python GroupKFold
+df_clean <- df_clean %>%
+  mutate(athlete_id = paste(FirstName, LastName, Country, sep = "_"))
+
+
+# ============================================================
+# 6. VALIDATION CHECK
+# ============================================================
+
+name_check <- df_clean %>%
+  count(FirstName, LastName, Country, sort = TRUE)
+
+df_clean %>%
+  dplyr::arrange(Country, LastName)
+
+# ============================================================
+# 7. Date Validation (FIXED)
+# ============================================================
+
+library(lubridate)
+library(dplyr)
+library(stringr)
+
+# Keep original
+df_clean <- df_clean %>%
+  mutate(Date_raw = Date)
+
+# Parse ALL formats correctly
+df_clean <- df_clean %>%
+  mutate(
+    Date_clean = parse_date_time(
+      Date_raw,
+      orders = c(
+        "a d b Y",   # SUN 25 JUL 2021
+        "d-b-y",     # 25-Jul-21
+        "d-b-Y",     # 25-Jul-2021
+        "d b Y"      # 25 Jul 2021
+      )
+    )
+  )
+
+# Replace Date with cleaned version
+df_clean <- df_clean %>%
+  mutate(Date = Date_clean)
+
+# Extract Year + Month safely
+df_clean <- df_clean %>%
+  mutate(
+    Year = year(Date),
+    Month = month(Date),
+    YearMonth = Year * 100 + Month
+  )
+
+# ============================================================
+# Checks
+# ============================================================
+
+class(df_clean$Date)
+sum(is.na(df_clean$Date))      # should be LOW or 0
+table(df_clean$Year, useNA = "ifany")
+
+# ============================================================
+# 7. FIX VAULT (PROTECTIVE VERSION)
+# ============================================================
+
+# 1. Identify ALL vault rows
+all_vaults <- df_clean %>% 
+  filter(str_detect(Apparatus, "^VT"))
+
+# 2. Separate the specialists (VT1/VT2) and calculate their average
+vt_specialists <- all_vaults %>%
+  filter(Apparatus %in% c("VT1", "VT2")) %>%
+  group_by(athlete_id, Country, Gender, Date, Competition, Round) %>%
+  summarise(
+    # Keep the max score or average? Usually, for ML, the average of the two is best
+    Score = mean(Score, na.rm = TRUE),
+    D_Score = max(D_Score, na.rm = TRUE), # Best difficulty shown
+    E_Score = mean(E_Score, na.rm = TRUE),
+    # Carry over other metadata
+    FirstName = first(FirstName),
+    LastName = first(LastName),
+    Year = first(Year),
+    .groups = "drop"
+  ) %>%
+  mutate(Apparatus = "VT", n_vaults = 2)
+
+# 3. Identify the All-Arounders (single "VT" entries)
+# We exclude anyone we already processed in the specialist group
+vt_aa <- all_vaults %>%
+  filter(Apparatus == "VT") %>%
+  anti_join(vt_specialists, by = c("athlete_id", "Date", "Round")) %>%
+  mutate(n_vaults = 1)
+
+# 4. Recombine and Replace
+vt_final <- bind_rows(vt_specialists, vt_aa)
+
+# 5. Final Dataset Assembly
+df_clean <- df_clean %>%
+  filter(!str_detect(Apparatus, "^VT")) %>% # Remove all messy vault rows
+  bind_rows(vt_final)                      # Add the clean, merged vault rows
+
+
+```
+```{r pivots}
+
+#  Number of gymnast per meet
+df_pivot_number_gymnast <- df_clean %>%
+  group_by(Competition, Gender) %>%
+  summarise(
+    n_gymnasts = n_distinct(paste(FirstName, LastName)),
+    .groups = "drop"
+  )
+
+
+# number of gymnast per country per event
+df_pivot2_gymnast_per_event_per_country <- df_clean %>%
+  group_by(Country, Apparatus, Competition) %>%
+  summarise(
+    n_gymnasts = n_distinct(paste(FirstName, LastName)),
+    .groups = "drop"
+  )
+
+# type of round per meet
+pivot_table_round_permeet <- df_clean %>%
+  count(Competition, Year, Round) %>%
+  pivot_wider(
+    names_from = Round,
+    values_from = n,
+    values_fill = 0
+  ) %>%
+  arrange(Year, Competition)
+
+
+# meets per year
+meets_per_year <- df_clean %>%
+  group_by(Year) %>%
+  summarise(
+    num_meets = n_distinct(Competition),
+    .groups = "drop"
+  )
+
+# countries per year
+countries_per_year <- df_clean %>%
+  group_by(Year) %>%
+  summarise(
+    num_countries = n_distinct(Country),
+    .groups = "drop"
+  )
+# athletes per year
+athletes_per_year <- df_clean %>%
+  group_by(Year) %>%
+  summarise(
+    num_athletes = n_distinct(paste(FirstName, LastName)),
+    .groups = "drop"
+  )
+## pvot wider
+df_pivot_wide <- df_clean %>%
+  group_by(Country, Apparatus) %>%
+  summarise(
+    n_gymnasts = n_distinct(paste(FirstName, LastName)),
+    .groups = "drop"
+  ) %>%
+  pivot_wider(
+    names_from = Apparatus,
+    values_from = n_gymnasts,
+    values_fill = 0
+  )%>%
+  mutate(total = rowSums(across(-Country))) %>%
+  arrange(desc(total))
+
+
+df_pivot_country_year_gender <- df_clean %>%
+  group_by(Year, Country, Gender) %>%
+  summarise(
+    n_gymnasts = n_distinct(paste(FirstName, LastName)),
+    .groups = "drop"
+  )
+
+olympic <- df_clean %>%
+  filter(Competition == "Olympic Games") %>%
+  select(Year, Competition, Gender, Round, Apparatus) %>%
+  distinct()
+
+library(dplyr)
+library(stringr)
+
+# 1. THE FINAL RESCUE
+df_final <- df_clean %>%
+  # Steal year from competition name ONLY if Year is still missing
+  mutate(Year = ifelse(is.na(Year), 
+                       as.numeric(str_extract(Competition, "\\d{4}")), 
+                       Year)) %>%
+  # Filter out any rows that absolutely cannot be dated (should be 0 now)
+  filter(!is.na(Year)) %>%
+  # Standardize all Apparatus names one last time to be safe
+  mutate(Apparatus = toupper(trimws(Apparatus)))
+
+# 2. THE QUALITY CHECK
+cat("Final Dataset Breakdown:\n")
+print(table(df_final$Year, useNA = "always"))
+
+# 3. WRITE THE MASTER FILE
+write.csv(df_final, "gymnastics_ml_ready.csv", row.names = FALSE)
+cat("\nFile saved: gymnastics_ml_ready.csv is ready for Python.")
+
+
+```
+
+```{r analisis}
+
+df_clean %>%
+  filter(Competition == "Olympic Games") %>%
+  count(Gender, Round)
+
+
+df_tokyo_mag <- df_clean %>%
+  group_by(athlete_id) %>%
+  summarise(n_apparatus = n_distinct(Apparatus)) %>%
+  count(n_apparatus)
+
+# 4. VERIFY
+print(table(df_clean$Year, useNA = "always"))
+
+
+
+
+```
+
