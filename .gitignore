@@ -1,0 +1,8 @@
+*.csv
+*.png
+*.pkl
+venv/
+__pycache__/
+outputs/
+descriptives_outputs/
+.DS_Store
