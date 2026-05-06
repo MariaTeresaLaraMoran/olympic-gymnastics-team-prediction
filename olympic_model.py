@@ -30,7 +30,7 @@ def classify_competition(comp):
         return "International"
     elif any(x in comp for x in ["european", "pan american", "asian", "commonwealth"]):
         return "Regional"
-    elif any(x in comp for x in ["u.s.", "usa", "british", "core hydration"]):
+    elif any(x in comp for x in ["u.s.", "usa", "british", "core hydration","winter"]):
         return "Domestic"
     else:
         return "Other"
@@ -369,7 +369,7 @@ features = [
     'Country', 'Apparatus', 'Gender',  
     'lag_1', 'lag_2', 'avg_last_3', 'd_lag_1', 'e_lag_1',
     'd_e_interaction', 'olympic_weight', 'elite_ratio', 
-    'depth_score', 'topk_score_weighted', 'tier_numeric'
+     'tier_numeric'
 ]
 
 # Step 3: Identify the Top 20 Powerhouse Countries
@@ -422,6 +422,13 @@ test = df_model[
 print("\nTrain shape:", train.shape)
 print("Test shape:", test.shape)
 
+total = len(train) + len(test)
+
+train_pct = len(train) / total * 100
+test_pct = len(test) / total * 100
+
+print(f"Train %: {train_pct:.2f}%")
+print(f"Test %: {test_pct:.2f}%")
 
 # ============================================================
 # 10. PREPARE MATRICES
@@ -635,38 +642,11 @@ prediction_results["error"] = (
     prediction_results["Score"] - prediction_results["pred_score"]
 )
 
-# ============================================================
-# 16 TEAM SCORE SIMULATION
-# ============================================================
-
-# We use 'pred_score' to simulate the team totals (Top 3 per apparatus)
-top3 = (
-    test.sort_values("pred_score", ascending=False)
-        .groupby(["Gender", "Country", "Apparatus"])
-        .head(3)
-)
-
-team_scores = (
-    top3.groupby(["Gender", "Country"])["pred_score"]
-        .sum()
-        .reset_index()
-        .sort_values(["Gender", "pred_score"], ascending=[True, False])
-)
-
-# Print results
-print("\n===== MAG (Men's Artistic Gymnastics) =====")
-print(team_scores[team_scores["Gender"] == "MAG"].head(20)) 
-
-print("\n===== WAG (Women's Artistic Gymnastics) =====")
-print(team_scores[team_scores["Gender"] == "WAG"].head(20))
-
 # ------------------------------------------------------------
-# 17 SAVE OUTPUTS
+# 16 SAVE OUTPUTS
 # ------------------------------------------------------------
 test.to_csv("test_output.csv", index=False)
 prediction_results.to_csv("prediction_results.csv", index=False)
-top3.to_csv("top3_output.csv", index=False)
-team_scores.to_csv("team_scores.csv", index=False)
 model_comparison.to_csv("rmse_comparison.csv", index=False)
 df_model.to_csv("df_model.csv", index=False)
 results_df.to_csv("model_metrics.csv", index=False)
@@ -676,4 +656,4 @@ joblib.dump(final_xgb, "xgb_model.pkl")
 
 
 print("\nDONE ✅")
-print("Files generated: test_output.csv, prediction_results.csv, top3_output.csv, team_scores.csv,df_model.csv, model_metrics.csv, mode_comparision.csv")
+print("Files generated: test_output.csv, prediction_results.csv, df_model.csv, model_metrics.csv, mode_comparision.csv")
