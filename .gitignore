@@ -6,3 +6,4 @@ __pycache__/
 outputs/
 descriptives_outputs/
 .DS_Store
+.Rproj.user

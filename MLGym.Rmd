@@ -68,14 +68,13 @@ library(purrr)
 
 
 select <- dplyr::select 
-mutate <- dplyr::mutate 
 filter <- dplyr::filter
 
 # ============================================================
 # 1. STANDARDIZATION & ASCII CLEANING
 # ============================================================
 df_clean <- df %>%
-  mutate(
+ dplyr::mutate(
     # Remove accents/special chars (Essential for matching dictionaries)
     FirstName = stri_trans_general(str_trim(FirstName), "Latin-ASCII"),
     LastName  = stri_trans_general(str_trim(LastName), "Latin-ASCII"),
@@ -256,7 +255,7 @@ df_clean %>%
   dplyr::arrange(Country, LastName)
 
 # ============================================================
-# 7. Date Validation (FIXED)
+# 7. Date Validation - Competition Date Ranges
 # ============================================================
 
 library(lubridate)
@@ -265,25 +264,63 @@ library(stringr)
 
 # Keep original
 df_clean <- df_clean %>%
-  mutate(Date_raw = Date)
+  mutate(
+    Date_raw = as.character(Date),
+    Date_raw = str_squish(Date_raw),
+    Date_raw = str_replace_all(Date_raw, "Sept", "Sep"),
+    Date_raw = str_replace(Date_raw, "^0 Sep 2023", "30 Sep 2023")
+  )
 
-# Parse ALL formats correctly
+# Create start date text from different date range formats
+df_clean <- df_clean %>%
+  mutate(
+    Date_start_text = case_when(
+      
+      # Example: 29 Oct 2022 - 6 Nov 2022
+      str_detect(Date_raw, "^\\d{1,2}\\s+[A-Za-z]+\\s+\\d{4}\\s+-\\s+\\d{1,2}\\s+[A-Za-z]+\\s+\\d{4}$") ~
+        str_extract(Date_raw, "^\\d{1,2}\\s+[A-Za-z]+\\s+\\d{4}"),
+      
+      # Example: 11-16 Apr 2023
+      str_detect(Date_raw, "^\\d{1,2}-\\d{1,2}\\s+[A-Za-z]+\\s+\\d{4}$") ~
+        paste(
+          str_extract(Date_raw, "^\\d{1,2}"),
+          str_extract(Date_raw, "[A-Za-z]+\\s+\\d{4}$")
+        ),
+      
+      # Example: 29 Jul-2 Aug 2022
+      str_detect(Date_raw, "^\\d{1,2}\\s+[A-Za-z]+-\\d{1,2}\\s+[A-Za-z]+\\s+\\d{4}$") ~
+        paste(
+          str_extract(Date_raw, "^\\d{1,2}\\s+[A-Za-z]+"),
+          str_extract(Date_raw, "\\d{4}$")
+        ),
+      
+      # If it is already a single date
+      TRUE ~ Date_raw
+    )
+  )
+
+# Parse the start date
 df_clean <- df_clean %>%
   mutate(
     Date_clean = parse_date_time(
-      Date_raw,
+      Date_start_text,
       orders = c(
         "a d b Y",   # SUN 25 JUL 2021
         "d-b-y",     # 25-Jul-21
         "d-b-Y",     # 25-Jul-2021
-        "d b Y"      # 25 Jul 2021
-      )
+        "d b Y",     # 25 Jul 2021
+        "d B Y",     # 25 July 2021
+        "Y-m-d",     # 2021-07-25
+        "m/d/Y",     # 07/25/2021
+        "d/m/Y"      # 25/07/2021
+      ),
+      locale = "C"
     )
   )
 
 # Replace Date with cleaned version
 df_clean <- df_clean %>%
-  mutate(Date = Date_clean)
+  mutate(Date = as.Date(Date_clean))
 
 # Extract Year + Month safely
 df_clean <- df_clean %>%
@@ -302,7 +339,7 @@ sum(is.na(df_clean$Date))      # should be LOW or 0
 table(df_clean$Year, useNA = "ifany")
 
 # ============================================================
-# 7. FIX VAULT (PROTECTIVE VERSION)
+# 8. FIX VAULT (PROTECTIVE VERSION)
 # ============================================================
 
 # 1. Identify ALL vault rows
@@ -342,7 +379,57 @@ df_clean <- df_clean %>%
   bind_rows(vt_final)                      # Add the clean, merged vault rows
 
 
+athlete_review <- df_clean %>%
+  arrange(athlete_id, Date, Competition, Round, Apparatus) %>%
+  select(
+    athlete_id,
+    FirstName,
+    LastName,
+    Country,
+    Gender,
+    Date,
+    Year,
+    Competition,
+    Round,
+    Apparatus,
+    Score,
+    D_Score,
+    E_Score
+  )
+
+View(athlete_review)
+
 ```
+```{r pivots}
+
+# ============================================================
+# DATE MISSINGNESS CHECK. Done !!
+# ============================================================
+
+date_missing_summary <- df_clean %>%
+  summarise(
+    total_rows = n(),
+    missing_Date_raw = sum(is.na(Date_raw) | Date_raw == ""),
+    missing_Date_clean = sum(is.na(Date)),
+    pct_missing_Date = round(mean(is.na(Date)) * 100, 2),
+    missing_Year = sum(is.na(Year)),
+    pct_missing_Year = round(mean(is.na(Year)) * 100, 2)
+  )
+
+date_missing_summary
+
+failed_date_formats <- df_clean %>%
+  filter(is.na(Date) & !is.na(Date_raw) & Date_raw != "") %>%
+  count(Date_raw, sort = TRUE)
+
+View(failed_date_formats)
+
+
+```
+
+
+
+
 ```{r pivots}
 
 #  Number of gymnast per meet
